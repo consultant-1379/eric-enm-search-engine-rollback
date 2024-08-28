@@ -1,0 +1,20 @@
+{{- if and .Values.persistentVolumeClaim.enabled (not .Values.persistentVolumeClaim.existingClaim) -}}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ template "eric-enm-search-engine-rollback.name" . }}
+  labels: {{- include "eric-enm-search-engine-rollback.labels" . | nindent 4 }}
+  annotations:
+    {{- $pvc := .Values.persistentVolumeClaim.annotations -}}
+    {{- $default := include "eric-enm-search-engine-rollback.annotations" . | fromYaml -}}
+    {{- include "eric-enm-search-engine-rollback.mergeAnnotations" (dict "location" .Template.Name "sources" (list $pvc $default)) | trim | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistentVolumeClaim.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistentVolumeClaim.size | quote }}
+{{- if .Values.persistentVolumeClaim.storageClassName }}
+  storageClassName: "{{ .Values.persistentVolumeClaim.storageClassName }}"
+{{- end }}
+{{- end -}}

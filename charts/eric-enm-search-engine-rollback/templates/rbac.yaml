@@ -1,0 +1,24 @@
+{{- if .Values.global -}}
+  {{- if .Values.global.security -}}
+    {{- if .Values.global.security.policyBinding -}}
+      {{- if .Values.global.security.policyBinding.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+ name: {{ template "eric-enm-search-engine-rollback.name" . }}-security-policy
+ labels: {{- include "eric-enm-search-engine-rollback.labels" . | nindent 4 }}
+ annotations:
+  {{- $securityPolicy := include "eric-enm-search-engine-rollback.securityPolicy.annotations" . | fromYaml -}}
+  {{- $default := include "eric-enm-search-engine-rollback.annotations" . | fromYaml -}}
+  {{- include "eric-enm-search-engine-rollback.mergeAnnotations" (dict "location" .Template.Name "sources" (list $securityPolicy $default)) | trim | nindent 4 }}
+roleRef:
+ apiGroup: rbac.authorization.k8s.io
+ kind: ClusterRole
+ name: {{ include "eric-enm-search-engine-rollback.securityPolicy.reference" . }}
+subjects:
+ - kind: ServiceAccount
+   name: {{ template "eric-enm-search-engine-rollback.name" . }}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}

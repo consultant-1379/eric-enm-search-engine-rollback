@@ -1,0 +1,591 @@
+modelVersion: 2.0
+
+description: "CBRS Standalone Domain Proxy Service"
+
+# See image catalog: https://confluence.lmera.ericsson.se/display/ACD/ADP+CICD+Docker+Image+Catalog
+docker-images:
+  - adp-helm-dr-check: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/common-library-adp-helm-dr-check:latest
+  - image-dr-check: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/adp-image-dr-check:latest
+  - adp-helm-kubectl: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-py3kubehelmbuilder:latest
+  - adp-release-auto: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-adp-release-auto:latest
+  
+import:
+  common: common-properties.yaml
+
+# List of constants
+properties:
+  - image-registry-path: armdocker.rnd.ericsson.se/proj-eric-enm-search-engine-rollback
+  - image-secret: armdocker
+  - image-dev-repopath: ${image-registry-path}-dev
+  - image-ci-repopath: ${image-registry-path}-ci-internal
+  - image-drop-repopath: ${image-registry-path}-drop
+  - image-full-name: ${image-drop-repopath}/${common.docker-image-name}
+
+  # Helm Chart name must follow the pattern: eric-[a-z0-9]{1,5}-[a-z0-9-]{1,30}
+  - helm-chart-repo-server-path: https://arm.seli.gic.ericsson.se/artifactory/proj-eric-enm-search-engine-rollback
+  - helm-chart-dev-repopath: ${helm-chart-repo-server-path}-dev-helm
+  - helm-chart-ci-repopath: ${helm-chart-repo-server-path}-ci-internal-helm
+  - helm-chart-drop-repo: ${helm-chart-repo-server-path}-drop-helm
+  - helm-chart-released-repo: ${helm-chart-repo-server-path}-released-helm
+  - helm-chart-released-folder: 'build/released-charts'
+  - image-drop-repopath-pointfix: proj-eric-enm-search-engine-rollback-drop
+  - docker-image-pointfix-release-repo: proj-eric-enm-search-engine-rollback-released
+  ###########################################
+  # Remove || true when image is ready
+  - enabled-image-design-rules: " || true"
+  - enabled-helm-design-rules: " || true"
+  - snapshot-version-image-design-rules: "-DimageDesignRule.config.DR-D470203-041=skip -DimageDesignRule.config.DR-D470203-050=skip"
+  
+# Import environment variables (For example: Jenkins parameters)
+env:
+  - HOME
+  - PWD
+  - RELEASE (default=false)
+  - DOCKER_NETWORK (default=--network host)
+
+
+  # Kubernetes
+  - COLLECT_LOGS_DIR (default=./k8s-logs)
+  - ENABLE_HELM_V3 (default=true)
+  - HELM_INSTALL_TIMEOUT (default=10m)
+  - HELM_RELEASE (default=${common.helm-chart-name}-release)
+  - HELM_TEST_TIMEOUT (default=5m0s)
+  - HELM_VERSION (default="3.5.2")
+  - K8_NAMESPACE (default=${common.helm-chart-name}-${var.commithash})
+  - KUBECONFIG (default=${env.HOME}/.kube/config)
+  - SITE_VALUES
+  - BRANCH
+
+  # Credentials
+  - DOCKER_CONFIG (default=${env.HOME}/.docker/config.json)
+  - GERRIT_USERNAME
+  - GERRIT_PASSWORD
+  - HELM_REPO_TOKEN
+    # the ARM functional user name for Helm repository
+  - HELM_USER
+
+
+
+# Variables, set by below tasks
+var:
+  - commithash
+  - commithash-full
+  - commit-author
+  - commit-email
+  - docker-config-basepath
+  - image-registry
+  - helm-chart-repo-internal
+  - image-full-name-internal
+  - image-repopath-internal
+  - image-repopath-drop
+  - rstate
+  - timestamp
+  - version
+  - snapshot-image-dr
+  # CBOS
+  - cbos-image-repo
+  - cbos-image-tag
+  - cbos-package-repo-url
+  - cbos-commit-message
+  - docker-sock-group
+  - released-version
+
+default-rules:
+  - clean
+  - init-dev
+  - lint
+  - image
+  - image-dr-check
+  - package
+  - publish
+  # - k8s-test
+
+# Rules to execute
+rules:
+  # Conditions - needs bob version 1.7.0-88 or newer
+  conditions:
+    - task: is-cbos-daily-drop-commit
+      cmd: if [[ "${var.cbos-commit-message}" =~ "DAILY DROP" ]]; then true; else false; fi
+    - task: is-cbos-pra-commit
+      cmd: if [[ "${var.cbos-commit-message}" =~ "PRA" ]]; then true; else false; fi
+
+  # Integrated rule to execute everything locally (init-dev)
+  release:
+    - rule: clean
+    - rule: init-dev
+    - rule: lint
+    - rule: image
+    - rule: image-dr-check
+    - rule: package
+    - rule: k8s-test
+
+  # Clean workspace
+  clean:
+    - task: rm
+      cmd:
+        - rm -rf .bob/ \?/ test-output/
+        - rm -rf k8s-logs/
+        - rm -f artifact.properties
+
+  # Common tasks for all init rules
+  init-common:
+    - task: timestamp
+      docker-image: adp-release-auto
+      cmd: date --rfc-3339=seconds | sed 's/ /T/' > .bob/var.timestamp
+    - task: version
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env RELEASE"
+      cmd: generate-version --is-release ${env.RELEASE} --output version
+    - task: rstate
+      docker-image: adp-release-auto
+      cmd: get_rstate.py ${var.version} > .bob/var.rstate
+    - task: commit
+      docker-image: adp-release-auto
+      cmd:
+        - git rev-parse --short HEAD > .bob/var.commithash
+        - git rev-parse HEAD > .bob/var.commithash-full
+        - git log -1 --format='%aN' > .bob/var.commit-author
+        - git log -1 --format='%aE' > .bob/var.commit-email
+
+  # Dev Tasks: only used by manually publishing development/black builds by developers
+  init-dev:
+    - rule: init-common
+    - task: image-repopath-internal
+      cmd: echo "${image-dev-repopath}" | cut -f2- -d '/' > .bob/var.image-repopath-internal
+    - task: image-registry
+      cmd: echo "${image-dev-repopath}" | cut -f1 -d '/' > .bob/var.image-registry
+    - task: image-full-name-internal
+      cmd: echo "${image-dev-repopath}/${common.docker-image-name}" > .bob/var.image-full-name-internal
+    - task: helm-chart-repo-internal
+      cmd: echo "${helm-chart-dev-repopath}" > .bob/var.helm-chart-repo-internal
+    - task: set-snapshot-image-dr
+      cmd: echo "${snapshot-version-image-design-rules}" > .bob/var.snapshot-image-dr
+
+  # CI-Internal Tasks: used by CI to use as temporary storage for testing, only CI user has write access.
+  init-precodereview:
+    - rule: init-common
+    - task: image-repopath-internal
+      cmd: echo "${image-ci-repopath}" | cut -f2- -d '/' > .bob/var.image-repopath-internal
+    - task: image-registry
+      cmd: echo "${image-ci-repopath}" | cut -f1 -d '/' > .bob/var.image-registry
+    - task: image-full-name-internal
+      cmd: echo "${image-ci-repopath}/${common.docker-image-name}" > .bob/var.image-full-name-internal
+    - task: helm-chart-repo-internal
+      cmd: echo "${helm-chart-ci-repopath}" > .bob/var.helm-chart-repo-internal
+    - task: set-snapshot-image-dr
+      cmd: echo "${snapshot-version-image-design-rules}" > .bob/var.snapshot-image-dr
+
+  # Drop level tasks: used by CI to publish artifacts after successful CI pipeline execution for a drop build
+  init-drop:
+    - rule: init-common
+    - task: image-repopath-internal
+      cmd: echo "${image-ci-repopath}" | cut -f2- -d '/' > .bob/var.image-repopath-internal
+    - task: image-repopath-drop
+      cmd: echo "${image-drop-repopath}" | cut -f2- -d '/' > .bob/var.image-repopath-drop
+    - task: image-registry
+      cmd: echo "${image-ci-repopath}" | cut -f1 -d '/' > .bob/var.image-registry
+    - task: image-full-name-internal
+      cmd: echo "${image-ci-repopath}/${common.docker-image-name}" > .bob/var.image-full-name-internal
+    - task: helm-chart-repo-internal
+      cmd: echo "${helm-chart-ci-repopath}" > .bob/var.helm-chart-repo-internal
+    - task: adp-artifacts-properties
+      docker-image: adp-release-auto
+      cmd: generate-adp-artifacts
+        --chart-name ${common.helm-chart-name}
+        --chart-version ${var.version}
+        --chart-repo ${helm-chart-drop-repo}
+        --image-name ${common.docker-image-name}
+        --image-version ${var.version}
+        --image-repo "${var.image-registry}/${var.image-repopath-drop}"
+    - task: write-git-details
+      cmd:
+        - echo "GIT_TAG=$(git log -1 --pretty=format:'%h')" >> artifact.properties
+        - echo "GIT_COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an')" >> artifact.properties
+        - echo "GIT_COMMIT_SUMMARY=$(git log -1 --pretty=format:'%s')" >> artifact.properties
+    - task: unset-snapshot-image-dr
+      cmd: echo "" > .bob/var.snapshot-image-dr
+
+  init-updatebaseos:
+    - task: replace-quotes
+      cmd:
+        - echo ${env.IMAGE_REPO} | sed -e 's/^"//' -e 's/"$//' > .bob/var.cbos-image-repo
+        - echo ${env.IMAGE_TAG} | sed -e 's/^"//' -e 's/"$//' > .bob/var.cbos-image-tag
+        - echo ${env.PACKAGE_REPO_URL} | sed -e 's/^"//' -e 's/"$//' > .bob/var.cbos-package-repo-url
+        - echo ${env.CBOS_COMMIT_MESSAGE} | sed -e 's/^"//' -e 's/"$//' > .bob/var.cbos-commit-message
+
+  lint:
+    - task: helm
+      docker-image: adp-helm-dr-check
+      docker-flags:
+        - "--env ENABLE_HELM_V3=true"
+        - ${env.DOCKER_NETWORK}
+      cmd: helm3 lint charts/${common.helm-chart-name} --debug
+    - task: helm-chart-check
+      docker-image: adp-helm-dr-check
+      cmd: helm-dr-check --helm-v3 --output ${env.PWD}/Design_Rules --helm-chart charts/${common.helm-chart-name} ${enabled-helm-design-rules}
+
+  # Build a docker image pointing to dirty repository
+  image:
+    - task: docker-build
+      cmd: docker build ${env.PWD}/docker/${common.docker-image-name} ${env.DOCKER_NETWORK}
+        --tag ${var.image-full-name-internal}:${var.version}
+        --build-arg OS_BASE_IMAGE_REPO=${common.image-base-os-repo}
+        --build-arg OS_BASE_IMAGE_TAG=${common.image-base-os-version}
+        --build-arg COMMIT=${var.commithash}
+        --build-arg RSTATE=${var.rstate}
+        --build-arg TIMESTAMP=${var.timestamp}
+        --build-arg VERSION=${var.version}
+        --build-arg PACKAGE_REPO_URL=${common.cbos-package-repo-url}
+
+  # Check for image design rule compliance
+  image-dr-check:
+    - task: check-image-dr
+      docker-image: image-dr-check
+      docker-in-docker: socket
+      cmd: "image-dr-check
+          --image ${var.image-full-name-internal}:${var.version}
+          --output ${env.PWD}/Design_Rules/check-image/
+          ${var.snapshot-image-dr}
+          ${enabled-image-design-rules}"
+    
+
+  # Push image to ci-internal repo and create local version of helm chart
+  package-local:
+    - task: image-push-internal
+      cmd:
+      - docker push ${var.image-full-name-internal}:${var.version}
+    - task: package-helm-internal
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env ENABLE_HELM_V3=true"
+      cmd: helm-package
+        --folder charts/${common.helm-chart-name}
+        --workdir .bob --output .bob/${common.helm-chart-name}-internal
+        --version ${var.version}
+        --replace eric-product-info.yaml:VERSION=${var.version}
+        --replace eric-product-info.yaml:REPO_PATH=${var.image-repopath-internal}
+        --replace values.yaml:RSTATE=${var.rstate}
+
+  # Push image to ci-internal repo, create internal version of helm chart and push it to internal repo
+  package:
+    - rule: package-local
+    - task: helm-upload-internal
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env HELM_REPO_TOKEN=${env.HELM_REPO_TOKEN}"
+      cmd: upload_file.sh
+        --filename=.bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz
+        --repository=${var.helm-chart-repo-internal}/${common.helm-chart-name}
+        --api-token=${env.HELM_REPO_TOKEN}
+
+  k8s-test:
+    - rule: helm-dry-run
+    - rule: create-namespace
+    - rule: setup-secrets
+    - rule: helm-install
+    - rule: healthcheck
+    - rule: networkcheck
+#   - rule: helm-test
+    - rule: collect-k8s-logs
+    - rule: delete-namespace
+
+  helm-dry-run:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker-config-basepath
+    - task: helm-dry-run
+      docker-image: adp-helm-kubectl
+      docker-flags: &docker_flags_kube_config
+        - ${env.DOCKER_NETWORK}
+        - "--env HOME=${env.HOME}"
+        - "--env K8_NAMESPACE=${env.K8_NAMESPACE}"
+        - "--env KUBECONFIG=${env.KUBECONFIG}"
+        - "--env ENABLE_HELM_V3"
+        - "--env HELM_VERSION"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}:${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:${env.KUBECONFIG}"
+        - "--volume ${var.docker-config-basepath}:${var.docker-config-basepath}"
+      cmd:
+        - mkdir -p ${env.COLLECT_LOGS_DIR}
+        - helm install .bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz
+          --set ${helm-test-values}
+          --dry-run
+          --debug
+          --generate-name > ${env.COLLECT_LOGS_DIR}/helm-install-dry-run.log
+
+  create-namespace:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker-config-basepath
+    - task: create-namespace
+      docker-image: adp-helm-kubectl
+      docker-flags: *docker_flags_kube_config
+      cmd: kubectl create namespace ${env.K8_NAMESPACE}
+
+  helm-install:
+    - rule: setup-secrets
+    - rule: helm-install-dependencies
+    - task: install-on-kubernetes
+      docker-image: adp-helm-kubectl
+      docker-flags: *docker_flags_kube_config
+      cmd: helm install ${env.HELM_RELEASE} .bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz
+        --namespace ${env.K8_NAMESPACE}
+        --values ${env.SITE_VALUES}
+        --set imageCredentials.pullSecret=${image-secret}
+        --set ${helm-test-values}
+        --timeout ${env.HELM_INSTALL_TIMEOUT}
+        --wait
+        --debug
+
+  healthcheck:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker-config-basepath
+    - task: healthcheck
+      docker-image: adp-helm-kubectl
+      docker-flags: *docker_flags_kube_config
+      cmd: ./k8s-test/scripts/healthcheck.sh
+
+  networkcheck:
+    - task: networkcheck
+      docker-image: adp-helm-kubectl
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env KUBECONFIG=${env.KUBECONFIG}"
+        - "--env K8_NAMESPACE=${env.K8_NAMESPACE}"
+        - "--env ENABLE_HELM_V3"
+        - "--env HELM_VERSION"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.HOME}:${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:${env.KUBECONFIG}"
+      cmd:
+      - chmod ug+x ./k8s-test/scripts/networkcheck.sh
+      - ./k8s-test/scripts/networkcheck.sh
+
+  helm-test:
+    - rule: setup-secrets
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker-config-basepath
+    - task: install-on-kubernetes
+      docker-image: adp-helm-kubectl
+      docker-flags: *docker_flags_kube_config
+      cmd: helm test ${env.HELM_RELEASE}
+        --namespace ${env.K8_NAMESPACE}
+        --timeout ${env.HELM_TEST_TIMEOUT}
+
+  delete-namespace:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker-config-basepath
+    - task: delete-releases
+      docker-image: adp-helm-kubectl
+      docker-flags: *docker_flags_kube_config
+      cmd:
+      - helm delete ${env.HELM_RELEASE} --namespace ${env.K8_NAMESPACE} || true
+      - helm delete ${env.HELM_RELEASE}-dependencies --namespace ${env.K8_NAMESPACE} || true
+    - task: delete-namespace
+      docker-image: adp-helm-kubectl
+      docker-flags: *docker_flags_kube_config
+      cmd: kubectl delete namespace ${env.K8_NAMESPACE}
+
+  # Publish docker images and helm charts to drop repository
+  # Call publish only when merged to master
+  publish:
+    - task: package-helm-public
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env ENABLE_HELM_V3=true"
+      cmd: helm-package
+        --folder charts/${common.helm-chart-name}
+        --workdir .bob --output build
+        --version ${var.version}
+   #    --replace eric-product-info.yaml:VERSION=${var.version}
+   #    --replace eric-product-info.yaml:REPO_PATH=${var.image-repopath-drop}
+    #   --replace values.yaml:RSTATE=${var.rstate}
+    - task: image-pull-internal
+      cmd:
+      - docker pull ${var.image-full-name-internal}:${var.version}
+    - task: image-tag-public
+      cmd:
+      - docker tag ${var.image-full-name-internal}:${var.version} ${image-full-name}:${var.version}
+    - task: image-push-public
+      cmd:
+      - docker push ${image-full-name}:${var.version} 
+    - task: git-tag
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GERRIT_USERNAME"
+        - "--env GERRIT_PASSWORD"
+      cmd: version-handler create-git-tag
+           --tag ${var.version}
+           --message "Release ${var.version}"
+           --git-repo-path .
+    - task: helm-upload
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env HELM_REPO_TOKEN=${env.HELM_REPO_TOKEN}"
+      cmd: upload_file.sh
+        --filename=build/${common.helm-chart-name}-${var.version}.tgz
+        --repository=${helm-chart-drop-repo}/${common.helm-chart-name}
+        --api-token=${env.HELM_REPO_TOKEN}
+
+  collect-k8s-logs:
+    - task: collect-logs-using-script
+      docker-image: adp-helm-kubectl
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env KUBECONFIG=${env.KUBECONFIG}"
+        - "--env ENABLE_HELM_V3"
+        - "--env HELM_VERSION"
+        - "--env COLLECT_LOGS_DIR"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.HOME}:${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:${env.KUBECONFIG}"
+      cmd:
+        - mkdir -p ${env.COLLECT_LOGS_DIR}
+        - kubectl config view > ${env.COLLECT_LOGS_DIR}/kubectl.config
+        - kubectl get ns > ${env.COLLECT_LOGS_DIR}/kubectl-get-ns.log
+        - helm ls -Aa > ${env.COLLECT_LOGS_DIR}/helm-ls-Aa.log
+        - printenv | grep -v CREDENTIALS | grep -v ARTIFACTORY > ${env.COLLECT_LOGS_DIR}/printenv.log
+        - ./k8s-test/scripts/collect_logs.sh ${env.K8_NAMESPACE} ${env.HELM_RELEASE} "/logs/server.log" ${env.COLLECT_LOGS_DIR}
+        - ./k8s-test/scripts/collect_logs.sh ${env.K8_NAMESPACE} ${env.HELM_RELEASE} "/logs/messages" ${env.COLLECT_LOGS_DIR}
+
+  # Create new cbos patch
+  create-new-cbos-patch:
+    - rule: init-updatebaseos
+    - task: create-new-cbos-patch-drop
+      condition: conditions:is-cbos-daily-drop-commit
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GERRIT_USERNAME"
+        - "--env GERRIT_PASSWORD"
+      cmd:
+        # sed separator is '#' as var.cbos-image-repo string includes '/'
+        - "sed -i 's#image-base-os-repo: .*#image-base-os-repo: \"${var.cbos-image-repo}\"#' common-properties.yaml"
+        - "sed -i 's/image-base-os-version: .*/image-base-os-version: \"${var.cbos-image-tag}\"/' common-properties.yaml"
+        # sed separator is '#' as var.cbos-package-repo-url string includes '/'
+        - "sed -i 's#cbos-package-repo-url: .*#cbos-package-repo-url: \"${var.cbos-package-repo-url}\"#' common-properties.yaml"
+        # TODO: Abandon code review after Verified +1
+        - gerrit create-patch
+          --file common-properties.yaml
+          --message "CBOS DAILY DROP (version ${var.cbos-image-tag}) from ${var.cbos-commit-message}"
+          --git-repo-local .
+          --wait-label "Verified"="+1"
+          --debug
+    - task: create-new-cbos-patch-pra
+      condition: conditions:is-cbos-pra-commit
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GERRIT_USERNAME"
+        - "--env GERRIT_PASSWORD"
+      cmd:
+        # sed separator is '#' as var.cbos-image-repo string includes '/'
+        - "sed -i 's#image-base-os-repo: .*#image-base-os-repo: \"${var.cbos-image-repo}\"#' common-properties.yaml"
+        - "sed -i 's/image-base-os-version: .*/image-base-os-version: \"${var.cbos-image-tag}\"/' common-properties.yaml"
+        # sed separator is '#' as var.cbos-package-repo-url string includes '/'
+        - "sed -i 's#cbos-package-repo-url: .*#cbos-package-repo-url: \"${var.cbos-package-repo-url}\"#' common-properties.yaml"
+        # TODO: Consider auto +2 and submit after Verified +1
+        - gerrit create-patch
+          --file common-properties.yaml
+          --message "CBOS PRA (version ${var.cbos-image-tag}) from ${var.cbos-commit-message}"
+          --git-repo-local .
+          --wait-label "Verified"="+1"
+          --debug
+  # incrementing the pointfix PATCH version 		  
+  increment-pointfix-version-prefix:
+    - task: git-push-version-prefix-increment
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GERRIT_USERNAME"
+        - "--env GERRIT_PASSWORD"
+      cmd: version-handler increment
+        --step-version-prefix "PATCH"
+        --git-repo-path .
+        --branch ${env.BRANCH}
+    - task: adp-artifacts-properties
+      docker-image: adp-release-auto
+      cmd: generate-adp-artifacts
+        --chart-name ${common.helm-chart-name}
+        --chart-version ${var.version}
+        --chart-repo ${helm-chart-drop-repo}
+  poinfix-publish:
+    - task: package-helm-public
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env ENABLE_HELM_V3=true"
+      cmd: helm-package
+        --folder charts/${common.helm-chart-name}
+        --workdir .bob --output build
+        --version ${var.version}
+ #      --replace eric-product-info.yaml:VERSION=${var.version}
+ #      --replace eric-product-info.yaml:REPO_PATH=${var.image-repopath-drop}
+ #      --replace values.yaml:RSTATE=${var.rstate}
+    - task: image-pull-internal
+      cmd:
+      - docker pull ${var.image-full-name-internal}:${var.version}
+    - task: image-tag-public
+      cmd:
+      - docker tag ${var.image-full-name-internal}:${var.version} ${image-full-name}:${var.version}
+    - task: image-push-public
+      cmd:
+      - docker push ${image-full-name}:${var.version}
+    - task: git-tag
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GERRIT_USERNAME"
+        - "--env GERRIT_PASSWORD"
+      cmd: version-handler create-git-tag
+        --tag ${var.version}
+        --message "Release ${var.version}"
+        --git-repo-path .
+    - task: helm-upload
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env HELM_REPO_TOKEN=${env.HELM_REPO_TOKEN}"
+      cmd: upload_file.sh
+        --filename=build/${common.helm-chart-name}-${var.version}.tgz
+        --repository=${helm-chart-drop-repo}/${common.helm-chart-name}
+        --api-token=${env.HELM_REPO_TOKEN}
+  pointfix-released-version:
+    - task: generate-released-version
+      cmd: echo ${var.version} | sed s/-/+/ > .bob/var.released-version
+    - task: helmchart-file-name
+      cmd: echo ${common.helm-chart-name}-${var.released-version}.tgz > .bob/var.helmchart-file-name
+    - task: generate-release-chart
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env HELM_USER"
+        - "--env HELM_TOKEN=${env.HELM_REPO_TOKEN}"
+      cmd:
+        - mkdir -p ${helm-chart-released-folder}
+        - generate_release_helm_package
+            --repo ${helm-chart-drop-repo}
+            --chart-name ${common.helm-chart-name}
+            --chart-version ${var.version}
+            --output ${helm-chart-released-folder}
+            --chart-released-version ${var.released-version}
+            --helm-user ${env.HELM_USER}
+            --arm-api-token ${env.HELM_REPO_TOKEN}
+            --replace ${image-drop-repopath-pointfix}=${docker-image-pointfix-release-repo}
+    - task: git-tag
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GERRIT_USERNAME"
+        - "--env GERRIT_PASSWORD"
+      cmd: version-handler create-git-tag
+        --tag ${var.released-version}
+        --message "Release ${var.released-version}"
+        --git-repo-path . 
+    - task: helm-upload
+      docker-image: adp-release-auto
+      docker-flags:
+        - ${env.DOCKER_NETWORK}
+        - "--env HELM_REPO_TOKEN=${env.HELM_REPO_TOKEN}"
+      cmd: upload_file.sh
+        --filename=${helm-chart-released-folder}/${common.helm-chart-name}-${var.released-version}.tgz
+        --repository=${helm-chart-released-repo}/${common.helm-chart-name}
+        --api-token=${env.HELM_REPO_TOKEN}

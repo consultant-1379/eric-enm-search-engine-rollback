@@ -1,0 +1,143 @@
+{{- $g := fromJson (include "eric-enm-search-engine-rollback.global" .) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "eric-enm-search-engine-rollback.name" . }}
+  labels: {{- include "eric-enm-search-engine-rollback.labels" . | nindent 4 }}
+  annotations: {{- include "eric-enm-search-engine-rollback.annotations" . | nindent 4 }}
+    {{- if .Values.bandwidth.maxEgressRate }}
+    kubernetes.io/egress-bandwidth: {{ .Values.bandwidth.maxEgressRate }}
+    {{ end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "eric-enm-search-engine-rollback.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  strategy:
+    type: {{ .Values.updateStrategy.type }}
+    {{- if and (eq .Values.updateStrategy.type "RollingUpdate") .Values.updateStrategy.rollingUpdate }}
+    rollingUpdate:
+{{- if .Values.updateStrategy.rollingUpdate.maxUnavailable }}
+      maxUnavailable: {{ .Values.updateStrategy.rollingUpdate.maxUnavailable }}
+{{- end }}
+{{- if .Values.updateStrategy.rollingUpdate.maxSurge }}
+      maxSurge: {{ .Values.updateStrategy.rollingUpdate.maxSurge }}
+{{- end }}
+    {{- end }}
+  template:
+    metadata:
+      labels: {{- include "eric-enm-search-engine-rollback.labels" . | nindent 8 }}
+      annotations: {{- include "eric-enm-search-engine-rollback.annotations" . | nindent 8 }}
+    spec:
+    {{- if .Values.podPriority }}
+    {{- if .Values.podPriority.priorityClassName }}
+      priorityClassName: {{ .Values.podPriority.priorityClassName | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- include "eric-enm-search-engine-rollback.topologySpreadConstraints" . | nindent 8 }}
+    {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ include "eric-enm-search-engine-rollback.name" . }}
+      securityContext:
+      containers:
+        - name: maincontainer
+          image: {{ template "eric-enm-search-engine-rollback.mainImagePath" . }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            privileged: true
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+            capabilities:
+              drop:
+                  - all
+          imagePullPolicy: {{ template "eric-enm-search-engine-rollback.registryImagePullPolicy" . }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          resources:
+            requests:
+            {{- if .Values.resources.maincontainer.requests.cpu }}
+              cpu: {{ .Values.resources.maincontainer.requests.cpu | quote }}
+            {{- end }}
+            {{- if .Values.resources.maincontainer.requests.memory }}
+              memory: {{ .Values.resources.maincontainer.requests.memory | quote }}
+            {{- end }}
+            {{- if (index .Values "resources" "maincontainer" "requests" "ephemeral-storage") }}
+            {{ println "  ephemeral-storage:" (index .Values "resources" "maincontainer" "requests" "ephemeral-storage" | quote) }}
+            {{- end }}
+            limits:
+            {{- if .Values.resources.maincontainer.limits.cpu }}
+              cpu: {{ .Values.resources.maincontainer.limits.cpu | quote }}
+            {{- end }}
+            {{- if .Values.resources.maincontainer.limits.memory }}
+              memory: {{ .Values.resources.maincontainer.limits.memory | quote }}
+            {{- end }}
+            {{- if (index .Values "resources" "maincontainer" "limits" "ephemeral-storage") }}
+            {{ println "  ephemeral-storage:" (index .Values "resources" "maincontainer" "limits" "ephemeral-storage" | quote) }}
+            {{- end }}
+          env:
+          - name: STORAGE_CONNECTIVITY
+            value: {{ .Values.persistentVolumeClaim.storageConnectivity | default "networked" | quote }}
+          volumeMounts:
+          - name: data
+            mountPath: {{ .Values.persistentVolumeClaim.mountPath | quote }}
+            subPath: {{ .Values.persistentVolumeClaim.subPath | quote }}
+          - name: elect-secret
+            mountPath: /run/secret
+            readOnly: true
+          - name: elect-secret-ca
+            mountPath: /run/secret/ca
+            readOnly: true    
+      volumes:
+      - name: elect-secret
+        secret:
+          secretName: eric-sec-sip-tls-trusted-root-cert
+      - name: elect-secret-ca
+        secret:
+          secretName: elect-secret-ca
+      - name: data
+      {{- if .Values.persistentVolumeClaim.enabled }}
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistentVolumeClaim.existingClaim | default (include "eric-enm-search-engine-rollback.name" .) }}
+      {{- else }}
+        emptyDir: {}
+      {{- end }}
+      {{- if include "eric-enm-search-engine-rollback.pullSecrets" . }}
+      imagePullSecrets:
+        - name: {{ template "eric-enm-search-engine-rollback.pullSecrets" . }}
+      {{- end }}
+      {{- if (or .Values.nodeSelector $g.nodeSelector) }}
+      nodeSelector: {{- include "eric-enm-search-engine-rollback.nodeSelector" . | nindent 8 }}
+      {{- end }}
+{{- if eq .Values.affinity.podAntiAffinity "hard" }}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key:  app.kubernetes.io/name
+                operator: In
+                values:
+                - {{ include "eric-enm-search-engine-rollback.name" . }}
+            topologyKey: {{ .Values.affinity.topologyKey }}
+{{- else if eq .Values.affinity.podAntiAffinity  "soft" }}
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key:  app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - {{ include "eric-enm-search-engine-rollback.name" . }}
+              topologyKey: {{ .Values.affinity.topologyKey }}
+{{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+    {{- end }}

@@ -1,0 +1,13 @@
+productName: "eric-enm-search-engine-rollback"
+productNumber: "CXD 101 1001"
+images:
+  mainImage:
+    productName: "eric-enm-search-engine-rollback"
+    productNumber: "CXU 101 1995"
+    registry: "armdocker.rnd.ericsson.se"
+    # Note: recommended to make the value a template and use helm-package script from release automation builder to replace at build time, e.g. repoPath: "MAIN_IMAGE_VERSION"
+    repoPath: "proj-enm"
+    name: "elasticsearch-admin"
+    # Note: recommended to make the value a template and use helm-package script from release automation builder to replace at build time, e.g. tag: "MAIN_IMAGE_REPO_PATH"
+    tag: "1.6.0-6"
+ 

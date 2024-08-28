@@ -1,0 +1,123 @@
+# Default values for eric-enm-search-engine-rollback.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# As default registry path, the global registry path will be used.
+global:
+ registry:
+   url: armdocker.rnd.ericsson.se
+ security:
+   policyBinding:
+     create: true
+   tls:
+     enabled: true
+ networkPolicy:
+   enabled: true
+# Secret must be manually created in the namespace, no default value
+#    pullSecret: eric-enm-search-engine-rollback-secret
+
+imageCredentials:
+  # repoPath include the image path relative to the registry url, excluding image name
+  mainImage:
+    repoPath: # see default in eric-product-info.yaml
+    registry: {}
+      # overrides global registry url
+      #url: armdocker.companyA.se
+
+replicaCount: 1
+
+networkPolicy:
+  enabled: true
+
+bandwidth:
+  maxEgressRate: 10M
+
+autoScaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+
+podDisruptionBudget:
+  minAvailable: 50%
+
+affinity:
+  podAntiAffinity: "hard"
+  topologyKey: "kubernetes.io/hostname"
+
+
+annotations: {}
+
+labels: {}
+
+tolerations:
+  - key: node.kubernetes.io/not-ready
+    operator: Exists
+    effect: NoExecute
+    tolerationSeconds: 0
+  - key: node.kubernetes.io/unreachable
+    operator: Exists
+    effect: NoExecute
+    tolerationSeconds: 0
+  
+persistentVolumeClaim:
+  enabled: true
+  # Mandatory: volume size
+  # keep at default value unless required for dimensioning or compatibility with storage provisioner      
+  # minimum supported volume size is 500Mi, maximum usable volume size is 10Gi, default size is 500Mi
+  size: 500Mi
+  storageClassName: network-block
+  storageConnectivity: networked
+  accessMode: ReadWriteOnce
+  subPath: eric-enm-search-engine
+  mountPath: "/var/lib/eric-enm-search-engine/data/"
+
+
+resources:
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  maincontainer:
+    limits:
+      cpu: "512m"
+      memory: "1Gi"
+      ephemeral-storage: ""
+    requests:
+      cpu: "512m"
+      memory: "512Mi"
+      ephemeral-storage: ""
+
+probes:
+  maincontainer:
+    livenessProbe:
+      initialDelaySeconds: 1
+      periodSeconds: 10
+      timeoutSeconds: 10
+      failureThreshold: 3
+    readinessProbe:
+      initialDelaySeconds: 1
+      periodSeconds: 10
+      timeoutSeconds: 10
+      successThreshold: 3
+      failureThreshold: 3
+    startupProbe:
+      failureThreshold: 30
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 10
+      
+updateStrategy:
+  # type can be OnDelete or RollingUpdate
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+
+topologySpreadConstraints: [ ]
+
+terminationGracePeriodSeconds: 30
+
+
+podPriority:
+  priorityClassName : ""

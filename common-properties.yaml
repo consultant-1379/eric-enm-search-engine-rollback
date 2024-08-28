@@ -1,0 +1,14 @@
+modelVersion: 2.0
+
+properties:
+    # Microservice helm chart name
+  - helm-chart-name: eric-enm-search-engine-rollback
+    # Microservice docker image name
+  - docker-image-name: eric-enm-search-engine-rollback
+  # cbos version
+  - image-base-os-repo: "armdocker.rnd.ericsson.se/proj-ldc/common_base_os_release"
+  - image-base-os-version: "3.44.0-9"
+  - cbos-package-repo-url: "https://arm.rnd.ki.sw.ericsson.se/artifactory/proj-ldc-repo-rpm-local/common_base_os/sles/3.44.0-9"
+  
+  
+  

@@ -1,0 +1,35 @@
+{{- if .Values.global -}}
+{{- if and .Values.global.networkPolicy .Values.networkPolicy -}}
+{{- if and .Values.global.networkPolicy.enabled .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ template "eric-enm-search-engine-rollback.name" . }}
+  labels: {{- include "eric-enm-search-engine-rollback.labels" . | nindent 4 }}
+  annotations: {{- include "eric-enm-search-engine-rollback.annotations" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+       ericsson.com/eric-data-search-engine-rollback: {{ include "eric-enm-search-engine-rollback.name" . }}
+  policyTypes:
+    - Egress
+    - Ingress
+  ingress:
+    - from:
+      - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: eric-data-search-engine-rollback
+      ports:
+        - port: 5004
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: eric-data-search-engine-rollback
+      ports:
+        - port: 9200
+          protocol: TCP
+{{- end }}
+{{- end }}
+{{- end }}

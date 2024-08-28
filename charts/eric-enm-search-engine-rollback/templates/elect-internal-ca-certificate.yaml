@@ -1,0 +1,23 @@
+{{- if (((.Values.global).security).tls).enabled }}
+apiVersion: siptls.sec.ericsson.com/v1
+kind: InternalCertificate
+metadata:
+  name: {{ template "eric-enm-search-engine-rollback.name" . }}-ca-certificate
+  annotations: {{- include "eric-enm-search-engine-rollback.annotations" . | nindent 4 }}
+  labels: {{- include "eric-enm-search-engine-rollback.labels" . | nindent 4 }}
+spec:
+  kubernetes:
+    generatedSecretName: elect-secret-ca
+    certificateName: clicert.pem
+    privateKeyName: cliprivkey.pem
+  certificate:
+    subject:
+      cn: eric-data-search-engine-tls
+    issuer:
+      reference: eric-data-search-engine-http-ca-cert
+    subjectAlternativeName:
+      populateKubernetesDns: false
+    extendedKeyUsage:
+      tlsClientAuth: true
+      tlsServerAuth: false
+{{- end }}

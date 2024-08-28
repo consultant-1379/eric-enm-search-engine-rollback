@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "new-sg.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  annotations: {{- include "new-sg.product-info" . | nindent 4 }}
+  labels: 
+    app.kubernetes.io/name: {{ template "new-sg.name" . }}
+    helm.sh/chart: {{ template "new-sg.chart" . }}
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+spec:
+  ttlSecondsAfterFinished: 0
+  backoffLimit: 0
+  activeDeadlineSeconds: 0
+  template:
+    spec:
+      #serviceAccountName: <<Placeholder_SA_Name>>
+      containers:
+        - name: new-image
+          image: armdocker.rnd.ericsson.se/proj-enm/elasticsearch-admin:1.11.0-1
+          imagePullPolicy: IfNotPresent
+          command: [ '/bin/sh', '-c', "echo 'hello.sh'"]
+      restartPolicy: OnFailure
+          # env:
+          # - name: <<Placeholder_Name>>
+            # value: <<Placeholder_Value>>
+          # volumeMounts:
+          # - name: <<Placeholder_Name>>
+            # mountPath: <<Placeholder_Path>>
+            # readOnly: true/false
+		   
+            # allowPrivilegeEscalation: true/false
+            # privileged: true/false
+            # readOnlyRootFilesystem: true/false
+            # runAsNonRoot: true/false
+            # capabilities:
+              # drop:
+                # - all
+      # volumes:
+        # - name: <<Placeholder_Name>>
+          # secret/configmap: <<Placeholder_Secret/Configmap>>
+      
